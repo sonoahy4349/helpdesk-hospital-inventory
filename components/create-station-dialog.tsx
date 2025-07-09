@@ -30,26 +30,37 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
   })
   const [locations, setLocations] = useState<any[]>([])
   const [responsibles, setResponsibles] = useState<any[]>([])
-  const [equipment, setEquipment] = useState<any[]>([])
+  const [availableEquipment, setAvailableEquipment] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
+  const [loadingData, setLoadingData] = useState(false)
+  const [debugInfo, setDebugInfo] = useState<any>(null)
   const { toast } = useToast()
 
+  // Cargar datos iniciales cuando se abre el dialog
   useEffect(() => {
-    const fetchData = async () => {
+    const fetchInitialData = async () => {
+      if (!open) return;
+      
       try {
-        const [locationsRes, responsiblesRes, equipmentRes] = await Promise.all([
+        setLoadingData(true)
+        console.log('Loading initial data...')
+        
+        const [locationsRes, responsiblesRes] = await Promise.all([
           fetch("/api/locations"),
           fetch("/api/responsibles"),
-          fetch("/api/equipment"),
         ])
 
         const locationsData = await locationsRes.json()
         const responsiblesData = await responsiblesRes.json()
-        const equipmentData = await equipmentRes.json()
 
-        setLocations(locationsData)
-        setResponsibles(responsiblesData)
-        setEquipment(equipmentData)
+        console.log('Locations loaded:', locationsData?.length)
+        console.log('Responsibles loaded:', responsiblesData?.length)
+
+        setLocations(locationsData || [])
+        setResponsibles(responsiblesData || [])
+        
+        // Cargar equipos disponibles
+        await fetchAvailableEquipment()
       } catch (error) {
         console.error("Error fetching dialog data:", error)
         toast({
@@ -57,13 +68,63 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
           description: "No se pudieron cargar los datos necesarios para el formulario.",
           variant: "destructive",
         })
+      } finally {
+        setLoadingData(false)
       }
     }
+    
     if (open) {
-      fetchData()
+      fetchInitialData()
       resetForm()
     }
   }, [open])
+
+  // Cargar equipos disponibles cuando cambia el tipo de estación
+  useEffect(() => {
+    if (open && stationType) {
+      fetchAvailableEquipment()
+      // Limpiar selecciones de equipos cuando cambia el tipo
+      setFormData(prev => ({
+        ...prev,
+        equipoPrincipal: "",
+        equipoSecundario: "",
+        equipoTercero: ""
+      }))
+    }
+  }, [stationType, open])
+
+  const fetchAvailableEquipment = async () => {
+    try {
+      console.log(`Fetching equipment for station type: ${stationType}`)
+      
+      const response = await fetch(`/api/equipment/available?stationType=${stationType}`)
+      
+      if (!response.ok) {
+        throw new Error(`Error ${response.status}: ${response.statusText}`)
+      }
+      
+      const data = await response.json()
+      console.log("Available equipment response:", data)
+      
+      setAvailableEquipment(data.equipment || [])
+      setDebugInfo(data.debug)
+      
+      if (data.equipment?.length === 0) {
+        toast({
+          title: "Información",
+          description: "No hay equipos disponibles para este tipo de estación.",
+        })
+      }
+    } catch (error) {
+      console.error("Error fetching available equipment:", error)
+      toast({
+        title: "Error",
+        description: `No se pudieron cargar los equipos disponibles: ${error}`,
+        variant: "destructive",
+      })
+      setAvailableEquipment([])
+    }
+  }
 
   const resetForm = () => {
     setStationType("cpu-monitor")
@@ -84,6 +145,7 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
   }
 
   const handleSelectChange = (id: string, value: string) => {
+    console.log(`Select changed: ${id} = ${value}`)
     setFormData((prev: any) => ({ ...prev, [id]: value }))
   }
 
@@ -96,6 +158,8 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
     setLoading(true)
 
     try {
+      console.log("Submitting station data:", { stationType, formData, accessories })
+      
       const response = await fetch("/api/stations", {
         method: "POST",
         headers: {
@@ -114,6 +178,7 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
         description: "Estación creada correctamente.",
       })
       onStationCreated()
+      onOpenChange(false)
     } catch (error: any) {
       console.error("Failed to create station:", error)
       toast({
@@ -126,9 +191,33 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
     }
   }
 
+  // Filtrar equipos por tipo para cada campo
+  const getEquipmentByType = (equipmentType: string) => {
+    const filtered = availableEquipment.filter((e: any) => e.tipo === equipmentType)
+    console.log(`Equipment filtered for type ${equipmentType}:`, filtered.length)
+    return filtered
+  }
+
   const renderFormFields = () => {
+    if (loadingData) {
+      return (
+        <div className="flex items-center justify-center py-8">
+          <div className="text-sm text-muted-foreground">Cargando equipos disponibles...</div>
+        </div>
+      )
+    }
+
+    // Debug info
+    if (debugInfo) {
+      console.log('Debug info:', debugInfo)
+    }
+
     switch (stationType) {
       case "cpu-monitor":
+        const cpuEquipment = getEquipmentByType("CPU")
+        const monitorEquipment = getEquipmentByType("MONITOR")
+        const otherEquipment = availableEquipment.filter(e => !["CPU", "MONITOR"].includes(e.tipo))
+        
         return (
           <>
             <div className="grid grid-cols-2 gap-4">
@@ -139,16 +228,20 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
                   value={formData.equipoPrincipal || ""}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Selecciona CPU" />
+                    <SelectValue placeholder={`Selecciona CPU (${cpuEquipment.length} disponibles)`} />
                   </SelectTrigger>
                   <SelectContent>
-                    {equipment
-                      .filter((e: any) => e.tipo_equipo === "CPU")
-                      .map((e: any) => (
-                        <SelectItem key={e.id} value={e.id.toString()}>
+                    {cpuEquipment.length > 0 ? (
+                      cpuEquipment.map((e: any) => (
+                        <SelectItem key={e.id} value={e.id}>
                           {e.marca} {e.modelo} ({e.numero_serie})
                         </SelectItem>
-                      ))}
+                      ))
+                    ) : (
+                      <SelectItem value="no-cpu" disabled>
+                        No hay CPUs disponibles
+                      </SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -159,43 +252,50 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
                   value={formData.equipoSecundario || ""}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Selecciona Monitor" />
+                    <SelectValue placeholder={`Selecciona Monitor (${monitorEquipment.length} disponibles)`} />
                   </SelectTrigger>
                   <SelectContent>
-                    {equipment
-                      .filter((e: any) => e.tipo_equipo === "Monitor")
-                      .map((e: any) => (
-                        <SelectItem key={e.id} value={e.id.toString()}>
+                    {monitorEquipment.length > 0 ? (
+                      monitorEquipment.map((e: any) => (
+                        <SelectItem key={e.id} value={e.id}>
                           {e.marca} {e.modelo} ({e.numero_serie})
                         </SelectItem>
-                      ))}
+                      ))
+                    ) : (
+                      <SelectItem value="no-monitor" disabled>
+                        No hay Monitores disponibles
+                      </SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="equipoTercero">Equipo Adicional (Opcional)</Label>
-              <Select
-                onValueChange={(value) => handleSelectChange("equipoTercero", value)}
-                value={formData.equipoTercero || ""}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecciona equipo adicional" />
-                </SelectTrigger>
-                <SelectContent>
-                  {equipment
-                    .filter((e: any) => e.tipo_equipo !== "CPU" && e.tipo_equipo !== "Monitor")
-                    .map((e: any) => (
-                      <SelectItem key={e.id} value={e.id.toString()}>
-                        {e.tipo_equipo} {e.marca} {e.modelo} ({e.numero_serie})
+            {otherEquipment.length > 0 && (
+              <div className="space-y-2">
+                <Label htmlFor="equipoTercero">Equipo Adicional (Opcional)</Label>
+                <Select
+                  onValueChange={(value) => handleSelectChange("equipoTercero", value)}
+                  value={formData.equipoTercero || ""}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecciona equipo adicional" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Sin equipo adicional</SelectItem>
+                    {otherEquipment.map((e: any) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {e.tipo} {e.marca} {e.modelo} ({e.numero_serie})
                       </SelectItem>
                     ))}
-                </SelectContent>
-              </Select>
-            </div>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </>
         )
       case "laptop":
+        const laptopEquipment = getEquipmentByType("LAPTOP")
+        
         return (
           <div className="space-y-2">
             <Label htmlFor="equipoPrincipal">Laptop</Label>
@@ -204,21 +304,27 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
               value={formData.equipoPrincipal || ""}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Selecciona Laptop" />
+                <SelectValue placeholder={`Selecciona Laptop (${laptopEquipment.length} disponibles)`} />
               </SelectTrigger>
               <SelectContent>
-                {equipment
-                  .filter((e: any) => e.tipo_equipo === "Laptop")
-                  .map((e: any) => (
-                    <SelectItem key={e.id} value={e.id.toString()}>
+                {laptopEquipment.length > 0 ? (
+                  laptopEquipment.map((e: any) => (
+                    <SelectItem key={e.id} value={e.id}>
                       {e.marca} {e.modelo} ({e.numero_serie})
                     </SelectItem>
-                  ))}
+                  ))
+                ) : (
+                  <SelectItem value="no-laptop" disabled>
+                    No hay Laptops disponibles
+                  </SelectItem>
+                )}
               </SelectContent>
             </Select>
           </div>
         )
       case "impresora":
+        const printerEquipment = getEquipmentByType("IMPRESORA")
+        
         return (
           <div className="space-y-2">
             <Label htmlFor="equipoPrincipal">Impresora</Label>
@@ -227,16 +333,22 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
               value={formData.equipoPrincipal || ""}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Selecciona Impresora" />
+                <SelectValue placeholder={`Selecciona Impresora (${printerEquipment.length} disponibles)`} />
               </SelectTrigger>
               <SelectContent>
-                {equipment
-                  .filter((e: any) => e.tipo_equipo === "Impresora")
-                  .map((e: any) => (
-                    <SelectItem key={e.id} value={e.id.toString()}>
+                {printerEquipment.length > 0 ? (
+                  printerEquipment.map((e: any) => (
+                    <SelectItem key={e.id} value={e.id}>
                       {e.marca} {e.modelo} ({e.numero_serie})
+                      {e.perfil && ` - ${e.perfil}`}
+                      {e.tipo_impresora && ` (${e.tipo_impresora})`}
                     </SelectItem>
-                  ))}
+                  ))
+                ) : (
+                  <SelectItem value="no-printer" disabled>
+                    No hay Impresoras disponibles
+                  </SelectItem>
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -248,9 +360,14 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px]">
+      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Nueva Estación</DialogTitle>
+          {debugInfo && (
+            <div className="text-xs text-gray-500 mt-2">
+              Debug: {debugInfo.finalAvailable} equipos disponibles de {debugInfo.totalEquipment} totales
+            </div>
+          )}
         </DialogHeader>
         <form onSubmit={handleSubmit} className="grid gap-4 py-4">
           <div className="space-y-2">
@@ -276,11 +393,14 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
                 <SelectValue placeholder="Selecciona ubicación" />
               </SelectTrigger>
               <SelectContent>
-                {locations.map((loc: any) => (
-                  <SelectItem key={loc.id} value={loc.id.toString()}>
-                    {loc.edificio} - {loc.planta} - {loc.servicio} ({loc.ubicacion_interna})
+                {locations.length > 0 ? locations.map((loc: any) => (
+                  <SelectItem key={loc.id} value={loc.id}>
+                    {loc.edificio} - {loc.planta} - {loc.servicio}
+                    {loc.ubicacion_interna && ` (${loc.ubicacion_interna})`}
                   </SelectItem>
-                ))}
+                )) : (
+                  <SelectItem value="no-location" disabled>No hay ubicaciones disponibles</SelectItem>
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -295,11 +415,14 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
                 <SelectValue placeholder="Selecciona responsable" />
               </SelectTrigger>
               <SelectContent>
-                {responsibles.map((resp: any) => (
-                  <SelectItem key={resp.id} value={resp.id.toString()}>
-                    {resp.nombre} {resp.apellido}
+                {responsibles.length > 0 ? responsibles.map((resp: any) => (
+                  <SelectItem key={resp.id} value={resp.id}>
+                    {resp.nombre_completo}
+                    {resp.cargo && ` - ${resp.cargo}`}
                   </SelectItem>
-                ))}
+                )) : (
+                  <SelectItem value="no-responsible" disabled>No hay responsables disponibles</SelectItem>
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -310,7 +433,7 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
               id="direccion"
               value={formData.direccion || ""}
               onChange={handleChange}
-              placeholder="Dirección de la estación"
+              placeholder="Ej: DO, DG, etc."
             />
           </div>
 
@@ -324,59 +447,68 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="mouse"
-                checked={accessories.mouse}
-                onCheckedChange={(checked: boolean) => handleCheckboxChange("mouse", checked)}
-              />
-              <Label htmlFor="mouse">Mouse</Label>
+          {/* Mostrar accesorios solo para laptops */}
+          {stationType === "laptop" && (
+            <div className="space-y-4">
+              <Label>Accesorios Incluidos</Label>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="mouse"
+                    checked={accessories.mouse}
+                    onCheckedChange={(checked: boolean) => handleCheckboxChange("mouse", checked)}
+                  />
+                  <Label htmlFor="mouse">Mouse</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="teclado"
+                    checked={accessories.teclado}
+                    onCheckedChange={(checked: boolean) => handleCheckboxChange("teclado", checked)}
+                  />
+                  <Label htmlFor="teclado">Teclado</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="webcam"
+                    checked={accessories.webcam}
+                    onCheckedChange={(checked: boolean) => handleCheckboxChange("webcam", checked)}
+                  />
+                  <Label htmlFor="webcam">Webcam</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="audifonos"
+                    checked={accessories.audifonos}
+                    onCheckedChange={(checked: boolean) => handleCheckboxChange("audifonos", checked)}
+                  />
+                  <Label htmlFor="audifonos">Audífonos</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="regulador"
+                    checked={accessories.regulador}
+                    onCheckedChange={(checked: boolean) => handleCheckboxChange("regulador", checked)}
+                  />
+                  <Label htmlFor="regulador">Regulador</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="noBreak"
+                    checked={accessories.noBreak}
+                    onCheckedChange={(checked: boolean) => handleCheckboxChange("noBreak", checked)}
+                  />
+                  <Label htmlFor="noBreak">No Break</Label>
+                </div>
+              </div>
             </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="teclado"
-                checked={accessories.teclado}
-                onCheckedChange={(checked: boolean) => handleCheckboxChange("teclado", checked)}
-              />
-              <Label htmlFor="teclado">Teclado</Label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="webcam"
-                checked={accessories.webcam}
-                onCheckedChange={(checked: boolean) => handleCheckboxChange("webcam", checked)}
-              />
-              <Label htmlFor="webcam">Webcam</Label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="audifonos"
-                checked={accessories.audifonos}
-                onCheckedChange={(checked: boolean) => handleCheckboxChange("audifonos", checked)}
-              />
-              <Label htmlFor="audifonos">Audífonos</Label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="regulador"
-                checked={accessories.regulador}
-                onCheckedChange={(checked: boolean) => handleCheckboxChange("regulador", checked)}
-              />
-              <Label htmlFor="regulador">Regulador</Label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="noBreak"
-                checked={accessories.noBreak}
-                onCheckedChange={(checked: boolean) => handleCheckboxChange("noBreak", checked)}
-              />
-              <Label htmlFor="noBreak">No Break</Label>
-            </div>
-          </div>
+          )}
 
           <DialogFooter>
-            <Button type="submit" disabled={loading}>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancelar
+            </Button>
+            <Button type="submit" disabled={loading || loadingData}>
               {loading ? "Creando..." : "Crear Estación"}
             </Button>
           </DialogFooter>

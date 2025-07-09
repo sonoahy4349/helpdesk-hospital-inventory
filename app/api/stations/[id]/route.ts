@@ -1,178 +1,224 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { createClient } from "@supabase/supabase-js"
 
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+// Debug de la importación de Supabase
+let supabaseAdmin: any = null;
 
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
-  const { id } = params
+try {
+  const supabaseModule = require("@/lib/supabase");
+  supabaseAdmin = supabaseModule.supabaseAdmin;
+  console.log("Supabase admin loaded:", !!supabaseAdmin);
+} catch (error) {
+  console.error("Error importing supabase:", error);
+}
+
+export async function GET() {
   try {
-    const { data: station, error } = await supabase
+    // Verificar que supabaseAdmin existe
+    if (!supabaseAdmin) {
+      console.error("supabaseAdmin is not defined");
+      return NextResponse.json({ 
+        error: "Database connection not available",
+        debug: "supabaseAdmin is undefined"
+      }, { status: 500 });
+    }
+
+    console.log("Attempting to fetch stations...");
+
+    // Consulta simple primero
+    const { data: stations, error } = await supabaseAdmin
       .from("workstations")
-      .select(
-        `
-        *,
-        workstation_equipment (
-          equipment_id,
-          equipment_type,
-          equipment (
-            id,
-            marca,
-            modelo,
-            numero_serie,
-            tipo_equipo,
-            perfil,
-            tipo_impresora
-          )
-        ),
-        workstation_accessories (*),
-        locations (
-          id,
-          edificio,
-          planta,
-          servicio,
-          ubicacion_interna
-        ),
-        responsibles (
-          id,
-          nombre,
-          apellido
-        )
-      `,
-      )
-      .eq("id", id)
-      .single()
+      .select("*")
 
     if (error) {
-      console.error(`Error fetching station with ID ${id}:`, error)
+      console.error("Error fetching stations:", error)
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    if (!station) {
-      return NextResponse.json({ error: "Station not found" }, { status: 404 })
+    console.log("Stations fetched:", stations?.length || 0);
+
+    // Si no hay estaciones, devolver array vacío
+    if (!stations || stations.length === 0) {
+      return NextResponse.json([])
     }
 
-    return NextResponse.json(station)
+    // Transformación simple sin joins complejos
+    const transformedStations = stations.map(station => ({
+      id: station.id,
+      tipo: station.station_type || 'unknown',
+      direccion: station.direccion || '',
+      status: station.status || 'unknown',
+      resguardos: station.status === "active" ? "Firmado" : "Pendiente",
+      created_at: station.created_at,
+      // Campos básicos para cada tipo
+      nombreEquipo: "Equipo",
+      marca: "N/A",
+      modelo: "N/A",
+      serie: "N/A",
+      equipoPrincipal: "Equipo Principal",
+      marcaPrincipal: "N/A",
+      modeloPrincipal: "N/A",
+      seriePrincipal: "N/A",
+      equipoSecundario: "Monitor",
+      marcaSecundario: "N/A",
+      modeloSecundario: "N/A",
+      serieSecundario: "N/A",
+      responsable: "N/A",
+      edificio: "N/A",
+      planta: "N/A",
+      servicio: "N/A",
+      ubicacionInterna: "N/A",
+      originalData: station
+    }));
+
+    return NextResponse.json(transformedStations)
   } catch (error) {
-    console.error(`Error in GET /api/stations/${id}:`, error)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    console.error("Error in GET /api/stations:", error)
+    return NextResponse.json({ 
+      error: "Internal server error",
+      details: error instanceof Error ? error.message : String(error)
+    }, { status: 500 })
   }
 }
 
-export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
-  const { id } = params
+export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
+    if (!supabaseAdmin) {
+      return NextResponse.json({ 
+        error: "Database connection not available" 
+      }, { status: 500 });
+    }
 
-    // Actualizar la estación
-    const { data: updatedStation, error: stationError } = await supabase
+    const body = await request.json()
+    console.log("Creating station with data:", body)
+
+    // Validar datos mínimos
+    if (!body.stationType) {
+      return NextResponse.json({ error: "stationType is required" }, { status: 400 })
+    }
+
+    // Crear la estación con datos mínimos
+    const insertData: any = {
+      station_type: body.stationType,
+      status: "active"
+    }
+
+    // Agregar campos opcionales si existen
+    if (body.formData?.direccion) insertData.direccion = body.formData.direccion;
+    if (body.formData?.ubicacion) insertData.ubicacion_id = body.formData.ubicacion;
+    if (body.formData?.responsable) insertData.responsable_id = body.formData.responsable;
+    if (body.formData?.autorizacion) insertData.authorized_by = body.formData.autorizacion;
+    if (body.formData?.descripcion) insertData.descripcion = body.formData.descripcion;
+
+    console.log("Inserting station with data:", insertData);
+
+    const { data: station, error: stationError } = await supabaseAdmin
       .from("workstations")
-      .update({
-        station_type: body.stationType,
-        direccion: body.formData.direccion,
-        location_id: body.formData.ubicacion,
-        responsible_id: body.formData.responsable,
-        authorized_by: body.formData.autorizacion,
-        status: body.formData.status, // Asumiendo que el estado puede ser actualizado
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", id)
+      .insert(insertData)
       .select()
       .single()
 
     if (stationError) {
-      console.error(`Error updating station with ID ${id}:`, stationError)
+      console.error("Error creating station:", stationError)
       return NextResponse.json({ error: stationError.message }, { status: 500 })
     }
 
-    // Eliminar equipos y accesorios existentes para reinsertar
-    await supabase.from("workstation_equipment").delete().eq("workstation_id", id)
-    await supabase.from("workstation_accessories").delete().eq("workstation_id", id)
+    console.log("Station created:", station)
 
-    // Re-insertar equipos
-    const equipmentInserts = []
-    if (body.formData.equipoPrincipal) {
+    // Agregar equipos si se proporcionaron
+    if (body.formData?.equipoPrincipal) {
+      const equipmentInserts = []
+
+      // Equipo principal
       equipmentInserts.push({
-        workstation_id: id,
+        workstation_id: station.id,
         equipment_id: body.formData.equipoPrincipal,
         equipment_type: "primary",
+        cantidad: 1
       })
-    }
-    if (body.formData.equipoSecundario) {
-      equipmentInserts.push({
-        workstation_id: id,
-        equipment_id: body.formData.equipoSecundario,
-        equipment_type: "secondary",
-      })
-    }
-    if (body.formData.equipoTercero) {
-      equipmentInserts.push({
-        workstation_id: id,
-        equipment_id: body.formData.equipoTercero,
-        equipment_type: "tertiary",
-      })
-    }
 
-    if (equipmentInserts.length > 0) {
-      const { error: equipmentError } = await supabase.from("workstation_equipment").insert(equipmentInserts)
+      // Equipo secundario (solo para CPU+Monitor)
+      if (body.stationType === "cpu-monitor" && body.formData.equipoSecundario) {
+        equipmentInserts.push({
+          workstation_id: station.id,
+          equipment_id: body.formData.equipoSecundario,
+          equipment_type: "secondary",
+          cantidad: 1
+        })
+      }
+
+      // Equipo terciario (opcional)
+      if (body.formData.equipoTercero) {
+        equipmentInserts.push({
+          workstation_id: station.id,
+          equipment_id: body.formData.equipoTercero,
+          equipment_type: "tertiary",
+          cantidad: 1
+        })
+      }
+
+      console.log("Adding equipment:", equipmentInserts)
+
+      const { error: equipmentError } = await supabaseAdmin
+        .from("workstation_equipment")
+        .insert(equipmentInserts)
+
       if (equipmentError) {
-        console.error("Error re-adding equipment to station:", equipmentError)
+        console.error("Error adding equipment:", equipmentError)
+        // Eliminar la estación si falló agregar equipos
+        await supabaseAdmin.from("workstations").delete().eq("id", station.id)
+        return NextResponse.json({ error: "Failed to assign equipment: " + equipmentError.message }, { status: 500 })
       }
     }
 
-    // Re-insertar accesorios
-    const accessoryInserts = Object.entries(body.accessories)
-      .filter(([_, value]) => value === true)
-      .map(([key, _]) => ({
-        workstation_id: id,
-        accessory_type: key,
-        included: true,
-      }))
-
-    if (accessoryInserts.length > 0) {
-      const { error: accessoryError } = await supabase.from("workstation_accessories").insert(accessoryInserts)
-      if (accessoryError) {
-        console.error("Error re-adding accessories to station:", accessoryError)
-      }
-    }
-
-    // Registrar actividad
-    await supabase.from("activity_log").insert({
-      user_id: 1, // TODO: obtener del usuario autenticado
-      action: "update",
-      table_name: "workstations",
-      record_id: id,
-      details: `Estación actualizada: ${id}`,
+    return NextResponse.json({
+      success: true,
+      station: station,
+      message: "Station created successfully"
     })
-
-    return NextResponse.json(updatedStation)
+    
   } catch (error) {
-    console.error(`Error in PUT /api/stations/${id}:`, error)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    console.error("Error in POST /api/stations:", error)
+    return NextResponse.json({ 
+      error: "Internal server error",
+      details: error instanceof Error ? error.message : String(error)
+    }, { status: 500 })
   }
 }
 
-export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
-  const { id } = params
+export async function DELETE(request: NextRequest) {
   try {
-    const { error } = await supabase.from("workstations").delete().eq("id", id)
-
-    if (error) {
-      console.error(`Error deleting station with ID ${id}:`, error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    if (!supabaseAdmin) {
+      return NextResponse.json({ 
+        error: "Database connection not available" 
+      }, { status: 500 });
     }
 
-    // Registrar actividad
-    await supabase.from("activity_log").insert({
-      user_id: 1, // TODO: obtener del usuario autenticado
-      action: "delete",
-      table_name: "workstations",
-      record_id: id,
-      details: `Estación eliminada: ${id}`,
-    })
+    const url = new URL(request.url)
+    const stationId = url.pathname.split('/').pop()
 
-    return NextResponse.json({ message: "Station deleted successfully" })
+    if (!stationId) {
+      return NextResponse.json({ error: "Station ID required" }, { status: 400 })
+    }
+
+    console.log("Deleting station:", stationId);
+
+    const { error: deleteError } = await supabaseAdmin
+      .from("workstations")
+      .delete()
+      .eq("id", stationId)
+
+    if (deleteError) {
+      console.error("Error deleting station:", deleteError)
+      return NextResponse.json({ error: deleteError.message }, { status: 500 })
+    }
+
+    return NextResponse.json({ success: true })
+    
   } catch (error) {
-    console.error(`Error in DELETE /api/stations/${id}:`, error)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    console.error("Error in DELETE /api/stations:", error)
+    return NextResponse.json({ 
+      error: "Internal server error",
+      details: error instanceof Error ? error.message : String(error)
+    }, { status: 500 })
   }
 }
