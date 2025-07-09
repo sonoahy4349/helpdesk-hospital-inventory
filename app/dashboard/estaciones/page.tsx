@@ -24,14 +24,14 @@ import {
 } from "@/components/ui/alert-dialog"
 
 const stationTypes = [
-  { id: "todas", label: "Todas las Estaciones", icon: null },
+  // { id: "todas", label: "Todas las Estaciones", icon: null }, ← ELIMINAR ESTA LÍNEA
   { id: "cpu-monitor", label: "CPU y Monitores", icon: Monitor },
   { id: "laptop", label: "Laptops", icon: Laptop },
   { id: "impresora", label: "Impresoras", icon: Printer },
 ]
 
 export default function EstacionesPage() {
-  const [selectedType, setSelectedType] = useState("todas")
+  const [selectedType, setSelectedType] = useState("cpu-monitor") // ← Cambiar de "todas" a "cpu-monitor"
   const [searchTerm, setSearchTerm] = useState("")
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [showResguardosDialog, setShowResguardosDialog] = useState(false)
@@ -45,89 +45,28 @@ export default function EstacionesPage() {
   const { toast } = useToast()
 
   // Cargar estaciones desde la API
-  const fetchStations = async () => {
-    try {
-      setLoading(true)
-      const response = await fetch("/api/stations")
-      if (!response.ok) {
-        throw new Error("Error al cargar estaciones")
-      }
-      const data = await response.json()
-
-      // Transformar datos para mantener compatibilidad con la UI
-      const transformedData = data.map((station: any) => {
-        const primaryEquipment = station.workstation_equipment?.find((we: any) => we.equipment_type === "primary")
-        const secondaryEquipment = station.workstation_equipment?.find((we: any) => we.equipment_type === "secondary")
-        const tertiaryEquipment = station.workstation_equipment?.find((we: any) => we.equipment_type === "tertiary")
-
-        if (station.station_type === "laptop") {
-          return {
-            id: station.id,
-            nombreEquipo: primaryEquipment?.equipment?.tipo_equipo || "Laptop",
-            marca: primaryEquipment?.equipment?.marca || "",
-            modelo: primaryEquipment?.equipment?.modelo || "",
-            serie: primaryEquipment?.equipment?.numero_serie || "",
-            direccion: station.direccion || "",
-            edificio: station.locations?.edificio || "",
-            planta: station.locations?.planta || "",
-            servicio: station.locations?.servicio || "",
-            ubicacionInterna: station.locations?.ubicacion_interna || "",
-            responsable: station.responsibles ? `${station.responsibles.nombre} ${station.responsibles.apellido}` : "",
-            resguardos: station.status === "active" ? "Firmado" : "Pendiente",
-            tipo: station.station_type,
-            originalData: station, // Guardar datos originales para edición
-          }
-        } else if (station.station_type === "impresora") {
-          return {
-            id: station.id,
-            ubicacion: station.locations ? `${station.locations.servicio} ${station.locations.ubicacion_interna}` : "",
-            area: station.locations?.servicio || "",
-            perfil: primaryEquipment?.equipment?.perfil || "Multifuncional",
-            tipoImpresora: primaryEquipment?.equipment?.tipo_impresora || "Láser",
-            marca: primaryEquipment?.equipment?.marca || "",
-            modelo: primaryEquipment?.equipment?.modelo || "",
-            serie: primaryEquipment?.equipment?.numero_serie || "",
-            resguardos: station.status === "active" ? "Firmado" : "Pendiente",
-            tipo: station.station_type,
-            originalData: station, // Guardar datos originales para edición
-          }
-        } else {
-          // CPU + Monitor
-          return {
-            id: station.id,
-            equipoPrincipal: primaryEquipment?.equipment?.tipo_equipo || "PC de escritorio",
-            marcaPrincipal: primaryEquipment?.equipment?.marca || "",
-            modeloPrincipal: primaryEquipment?.equipment?.modelo || "",
-            seriePrincipal: primaryEquipment?.equipment?.numero_serie || "",
-            equipoSecundario: secondaryEquipment?.equipment?.tipo_equipo || "Monitor",
-            marcaSecundario: secondaryEquipment?.equipment?.marca || "",
-            modeloSecundario: secondaryEquipment?.equipment?.modelo || "",
-            serieSecundario: secondaryEquipment?.equipment?.numero_serie || "",
-            direccion: station.direccion || "",
-            edificio: station.locations?.edificio || "",
-            planta: station.locations?.planta || "",
-            servicio: station.locations?.servicio || "",
-            ubicacionInterna: station.locations?.ubicacion_interna || "",
-            responsable: station.responsibles ? `${station.responsibles.nombre} ${station.responsibles.apellido}` : "",
-            resguardos: station.status === "active" ? "Firmado" : "Pendiente",
-            tipo: station.station_type,
-            originalData: station, // Guardar datos originales para edición
-          }
-        }
-      })
-
-      setStations(transformedData)
-    } catch (error) {
-      console.error("Error fetching stations:", error)
-      toast({
-        title: "Error",
-        description: "No se pudieron cargar las estaciones",
-        variant: "destructive",
-      })
-    } finally {
-      setLoading(false)
+const fetchStations = async () => {
+  try {
+    setLoading(true)
+    const response = await fetch("/api/stations")
+    if (!response.ok) {
+      throw new Error("Error al cargar estaciones")
     }
+    const data = await response.json()
+    
+    // Los datos ya vienen transformados desde la API
+    setStations(data)
+  } catch (error) {
+    console.error("Error fetching stations:", error)
+    toast({
+      title: "Error",
+      description: "No se pudieron cargar las estaciones",
+      variant: "destructive",
+    })
+  } finally {
+    setLoading(false)
   }
+}
 
   useEffect(() => {
     fetchStations()
@@ -202,64 +141,64 @@ export default function EstacionesPage() {
   }
 
   // Función para renderizar el header de la tabla según el tipo
-  const renderTableHeader = () => {
-    if (selectedType === "laptop") {
-      return (
-        <TableRow>
-          <TableHead>ID</TableHead>
-          <TableHead>Nombre del Equipo</TableHead>
-          <TableHead>Marca</TableHead>
-          <TableHead>Modelo</TableHead>
-          <TableHead>Dirección</TableHead>
-          <TableHead>Edificio</TableHead>
-          <TableHead>Planta</TableHead>
-          <TableHead>Servicio</TableHead>
-          <TableHead>Ubicación Interna</TableHead>
-          <TableHead>Responsable</TableHead>
-          <TableHead>Resguardos</TableHead>
-          <TableHead>Acciones</TableHead>
-        </TableRow>
-      )
-    } else if (selectedType === "impresora") {
-      return (
-        <TableRow>
-          <TableHead>ID</TableHead>
-          <TableHead>Ubicación</TableHead>
-          <TableHead>Área</TableHead>
-          <TableHead>Perfil</TableHead>
-          <TableHead>Tipo</TableHead>
-          <TableHead>Marca</TableHead>
-          <TableHead>Modelo</TableHead>
-          <TableHead>No. de Serie</TableHead>
-          <TableHead>Resguardos</TableHead>
-          <TableHead>Acciones</TableHead>
-        </TableRow>
-      )
-    } else {
-      // CPU y Monitores o Todas las estaciones
-      return (
-        <TableRow>
-          <TableHead>No.</TableHead>
-          <TableHead>Equipo Principal</TableHead>
-          <TableHead>Marca</TableHead>
-          <TableHead>Modelo</TableHead>
-          <TableHead>No. de serie</TableHead>
-          <TableHead>Equipo Secundario</TableHead>
-          <TableHead>Marca</TableHead>
-          <TableHead>Modelo</TableHead>
-          <TableHead>No. de serie</TableHead>
-          <TableHead>Dirección</TableHead>
-          <TableHead>Edificio</TableHead>
-          <TableHead>Planta</TableHead>
-          <TableHead>Servicio</TableHead>
-          <TableHead>Ubicación Interna</TableHead>
-          <TableHead>Responsable</TableHead>
-          <TableHead>Resguardos</TableHead>
-          <TableHead>Acciones</TableHead>
-        </TableRow>
-      )
-    }
+const renderTableHeader = () => {
+  if (selectedType === "laptop") {
+    return (
+      <TableRow>
+        <TableHead>ID</TableHead>
+        <TableHead>Nombre del Equipo</TableHead>
+        <TableHead>Marca</TableHead>
+        <TableHead>Modelo</TableHead>
+        <TableHead>Dirección</TableHead>
+        <TableHead>Edificio</TableHead>
+        <TableHead>Planta</TableHead>
+        <TableHead>Servicio</TableHead>
+        <TableHead>Ubicación Interna</TableHead>
+        <TableHead>Responsable</TableHead>
+        <TableHead>Resguardos</TableHead>
+        <TableHead>Acciones</TableHead>
+      </TableRow>
+    )
+  } else if (selectedType === "impresora") {
+    return (
+      <TableRow>
+        <TableHead>ID</TableHead>
+        <TableHead>Ubicación</TableHead>
+        <TableHead>Área</TableHead>
+        <TableHead>Perfil</TableHead>
+        <TableHead>Tipo</TableHead>
+        <TableHead>Marca</TableHead>
+        <TableHead>Modelo</TableHead>
+        <TableHead>No. de Serie</TableHead>
+        <TableHead>Resguardos</TableHead>
+        <TableHead>Acciones</TableHead>
+      </TableRow>
+    )
+  } else {
+    // CPU y Monitores o Todas las estaciones
+    return (
+      <TableRow>
+        <TableHead>No.</TableHead>
+        <TableHead>Equipo Principal</TableHead>
+        <TableHead>Marca</TableHead>
+        <TableHead>Modelo</TableHead>
+        <TableHead>No. de serie</TableHead>
+        <TableHead>Equipo Secundario</TableHead>
+        <TableHead>Marca</TableHead>
+        <TableHead>Modelo</TableHead>
+        <TableHead>No. de serie</TableHead>
+        <TableHead>Dirección</TableHead>
+        <TableHead>Edificio</TableHead>
+        <TableHead>Planta</TableHead>
+        <TableHead>Servicio</TableHead>
+        <TableHead>Ubicación Interna</TableHead>
+        <TableHead>Responsable</TableHead>
+        <TableHead>Resguardos</TableHead>
+        <TableHead>Acciones</TableHead>
+      </TableRow>
+    )
   }
+}
 
   // Función para renderizar las filas de la tabla según el tipo
   const renderTableRow = (station: any) => {

@@ -146,7 +146,9 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
 
   const handleSelectChange = (id: string, value: string) => {
     console.log(`Select changed: ${id} = ${value}`)
-    setFormData((prev: any) => ({ ...prev, [id]: value }))
+    // Si el valor es "none", guardamos como vacío
+    const finalValue = value === "none" ? "" : value
+    setFormData((prev: any) => ({ ...prev, [id]: finalValue }))
   }
 
   const handleCheckboxChange = (id: string, checked: boolean) => {
@@ -281,7 +283,7 @@ export function CreateStationDialog({ open, onOpenChange, onStationCreated }: Cr
                     <SelectValue placeholder="Selecciona equipo adicional" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Sin equipo adicional</SelectItem>
+                    <SelectItem value="none">Sin equipo adicional</SelectItem>
                     {otherEquipment.map((e: any) => (
                       <SelectItem key={e.id} value={e.id}>
                         {e.tipo} {e.marca} {e.modelo} ({e.numero_serie})

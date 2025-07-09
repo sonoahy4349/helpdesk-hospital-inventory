@@ -22,12 +22,39 @@ export async function GET() {
       }, { status: 500 });
     }
 
-    console.log("Attempting to fetch stations...");
+    console.log("Attempting to fetch stations with complete data...");
 
-    // Consulta simple primero
+    // Consulta con JOINs para obtener toda la información
     const { data: stations, error } = await supabaseAdmin
       .from("workstations")
-      .select("*")
+      .select(`
+        *,
+        locations (
+          id,
+          edificio,
+          planta,
+          servicio,
+          ubicacion_interna
+        ),
+        responsibles (
+          id,
+          nombre_completo,
+          cargo
+        ),
+        workstation_equipment (
+          equipment_type,
+          cantidad,
+          equipment (
+            id,
+            tipo,
+            marca,
+            modelo,
+            numero_serie,
+            perfil,
+            tipo_impresora
+          )
+        )
+      `)
 
     if (error) {
       console.error("Error fetching stations:", error)
@@ -35,40 +62,79 @@ export async function GET() {
     }
 
     console.log("Stations fetched:", stations?.length || 0);
+    console.log("Sample station data:", stations?.[0]);
 
     // Si no hay estaciones, devolver array vacío
     if (!stations || stations.length === 0) {
       return NextResponse.json([])
     }
 
-    // Transformación simple sin joins complejos
-    const transformedStations = stations.map(station => ({
-      id: station.id,
-      tipo: station.station_type || 'unknown',
-      direccion: station.direccion || '',
-      status: station.status || 'unknown',
-      resguardos: station.status === "active" ? "Firmado" : "Pendiente",
-      created_at: station.created_at,
-      // Campos básicos para cada tipo
-      nombreEquipo: "Equipo",
-      marca: "N/A",
-      modelo: "N/A",
-      serie: "N/A",
-      equipoPrincipal: "Equipo Principal",
-      marcaPrincipal: "N/A",
-      modeloPrincipal: "N/A",
-      seriePrincipal: "N/A",
-      equipoSecundario: "Monitor",
-      marcaSecundario: "N/A",
-      modeloSecundario: "N/A",
-      serieSecundario: "N/A",
-      responsable: "N/A",
-      edificio: "N/A",
-      planta: "N/A",
-      servicio: "N/A",
-      ubicacionInterna: "N/A",
-      originalData: station
-    }));
+    // Transformar datos correctamente
+    const transformedStations = stations.map(station => {
+      // Obtener equipos por tipo
+      const primaryEquipment = station.workstation_equipment?.find((we: any) => we.equipment_type === "primary")?.equipment
+      const secondaryEquipment = station.workstation_equipment?.find((we: any) => we.equipment_type === "secondary")?.equipment
+      const tertiaryEquipment = station.workstation_equipment?.find((we: any) => we.equipment_type === "tertiary")?.equipment
+
+      // Transformar según el tipo de estación
+      if (station.station_type === "laptop") {
+        return {
+          id: station.id,
+          nombreEquipo: primaryEquipment?.tipo || "Laptop",
+          marca: primaryEquipment?.marca || "Sin asignar",
+          modelo: primaryEquipment?.modelo || "Sin asignar",
+          serie: primaryEquipment?.numero_serie || "Sin asignar",
+          direccion: station.direccion || "Sin asignar",
+          edificio: station.locations?.edificio || "Sin asignar",
+          planta: station.locations?.planta || "Sin asignar",
+          servicio: station.locations?.servicio || "Sin asignar",
+          ubicacionInterna: station.locations?.ubicacion_interna || "Sin asignar",
+          responsable: station.responsibles?.nombre_completo || "Sin asignar",
+          resguardos: station.status === "active" ? "Firmado" : "Pendiente",
+          tipo: station.station_type,
+          originalData: station,
+        }
+      } else if (station.station_type === "impresora") {
+        return {
+          id: station.id,
+          ubicacion: station.locations ? `${station.locations.servicio} ${station.locations.ubicacion_interna || ''}`.trim() : "Sin asignar",
+          area: station.locations?.servicio || "Sin asignar",
+          perfil: primaryEquipment?.perfil || "Sin asignar",
+          tipoImpresora: primaryEquipment?.tipo_impresora || "Sin asignar",
+          marca: primaryEquipment?.marca || "Sin asignar",
+          modelo: primaryEquipment?.modelo || "Sin asignar",
+          serie: primaryEquipment?.numero_serie || "Sin asignar",
+          resguardos: station.status === "active" ? "Firmado" : "Pendiente",
+          tipo: station.station_type,
+          originalData: station,
+        }
+      } else {
+        // CPU + Monitor (default)
+        return {
+          id: station.id,
+          equipoPrincipal: primaryEquipment?.tipo || "Sin asignar",
+          marcaPrincipal: primaryEquipment?.marca || "Sin asignar",
+          modeloPrincipal: primaryEquipment?.modelo || "Sin asignar",
+          seriePrincipal: primaryEquipment?.numero_serie || "Sin asignar",
+          equipoSecundario: secondaryEquipment?.tipo || "Sin asignar",
+          marcaSecundario: secondaryEquipment?.marca || "Sin asignar",
+          modeloSecundario: secondaryEquipment?.modelo || "Sin asignar",
+          serieSecundario: secondaryEquipment?.numero_serie || "Sin asignar",
+          direccion: station.direccion || "Sin asignar",
+          edificio: station.locations?.edificio || "Sin asignar",
+          planta: station.locations?.planta || "Sin asignar",
+          servicio: station.locations?.servicio || "Sin asignar",
+          ubicacionInterna: station.locations?.ubicacion_interna || "Sin asignar",
+          responsable: station.responsibles?.nombre_completo || "Sin asignar",
+          resguardos: station.status === "active" ? "Firmado" : "Pendiente",
+          tipo: station.station_type,
+          originalData: station,
+        }
+      }
+    });
+
+    console.log("Transformed stations:", transformedStations.length);
+    console.log("Sample transformed station:", transformedStations[0]);
 
     return NextResponse.json(transformedStations)
   } catch (error) {
@@ -147,7 +213,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Equipo terciario (opcional)
-      if (body.formData.equipoTercero) {
+      if (body.formData.equipoTercero && body.formData.equipoTercero !== "none") {
         equipmentInserts.push({
           workstation_id: station.id,
           equipment_id: body.formData.equipoTercero,
@@ -202,6 +268,18 @@ export async function DELETE(request: NextRequest) {
 
     console.log("Deleting station:", stationId);
 
+    // Primero eliminar las relaciones de equipos
+    const { error: equipmentError } = await supabaseAdmin
+      .from("workstation_equipment")
+      .delete()
+      .eq("workstation_id", stationId)
+
+    if (equipmentError) {
+      console.error("Error deleting station equipment:", equipmentError)
+      return NextResponse.json({ error: equipmentError.message }, { status: 500 })
+    }
+
+    // Luego eliminar la estación
     const { error: deleteError } = await supabaseAdmin
       .from("workstations")
       .delete()

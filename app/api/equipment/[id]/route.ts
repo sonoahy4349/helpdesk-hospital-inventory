@@ -1,29 +1,63 @@
 import { NextResponse } from "next/server"
 import { supabase } from "@/lib/supabase"
 
-export async function GET(request: Request, { params }: { params: { id: string } }) {
-  const { id } = params
+export async function GET() {
   try {
-    const { data: equipment, error } = await supabase.from("equipment").select("*").eq("id", id).single()
+    const { data: equipment, error } = await supabase
+      .from("equipment")
+      .select("*")
+      .order("created_at", { ascending: false })
 
     if (error) {
-      console.error(`Error fetching equipment with ID ${id}:`, error)
+      console.error("Error fetching equipment:", error)
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    if (!equipment) {
-      return NextResponse.json({ error: "Equipment not found" }, { status: 404 })
-    }
+    // Agregar información de asignación para cada equipo
+    const equipmentWithAssignment = await Promise.all(
+      equipment?.map(async (item) => {
+        // Verificar si está asignado a alguna workstation
+        const { data: assignment } = await supabase
+          .from("workstation_equipment")
+          .select(`
+            workstation_id,
+            equipment_type,
+            workstations (
+              id,
+              station_type,
+              status,
+              direccion
+            )
+          `)
+          .eq("equipment_id", item.id)
+          .single()
 
-    return NextResponse.json(equipment, { status: 200 })
+        return {
+          ...item,
+          isAssigned: !!assignment,
+          assignedTo: assignment ? {
+            workstation_id: assignment.workstation_id,
+            equipment_type: assignment.equipment_type,
+            station_type: assignment.workstations?.station_type,
+            station_status: assignment.workstations?.status,
+            station_direccion: assignment.workstations?.direccion
+          } : null,
+          // Para compatibilidad con tu frontend actual
+          estacion: assignment 
+            ? `${assignment.workstations?.station_type} (${assignment.equipment_type})` 
+            : "Sin asignar"
+        }
+      }) || []
+    )
+
+    return NextResponse.json(equipmentWithAssignment, { status: 200 })
   } catch (e: any) {
-    console.error(`Unexpected error in GET /api/equipment/${id}:`, e)
+    console.error("Unexpected error in GET /api/equipment:", e)
     return NextResponse.json({ error: "Internal Server Error", details: e.message }, { status: 500 })
   }
 }
 
-export async function PUT(request: Request, { params }: { params: { id: string } }) {
-  const { id } = params
+export async function POST(request: Request) {
   try {
     const { nombre, tipo, perfil, tipo_impresora, marca, modelo, numero_serie, estado } = await request.json()
 
@@ -35,59 +69,81 @@ export async function PUT(request: Request, { params }: { params: { id: string }
       )
     }
 
-    if (tipo === "impresora") {
+    if (tipo === "IMPRESORA") {
       if (!perfil || !tipo_impresora) {
         return NextResponse.json(
-          { error: "For 'impresora' type, 'perfil' and 'tipo_impresora' are required." },
+          { error: "For 'IMPRESORA' type, 'perfil' and 'tipo_impresora' are required." },
           { status: 400 },
         )
       }
     }
 
-    const { data: updatedEquipment, error } = await supabase
+    // Normalizar el tipo a mayúsculas para consistencia
+    const normalizedTipo = tipo.toUpperCase()
+
+    const { data: newEquipment, error } = await supabase
       .from("equipment")
-      .update({
+      .insert({
         nombre: nombre || null,
-        tipo,
-        perfil: tipo === "impresora" ? perfil : null,
-        tipo_impresora: tipo === "impresora" ? tipo_impresora : null,
+        tipo: normalizedTipo,
+        perfil: tipo === "IMPRESORA" ? perfil : null,
+        tipo_impresora: tipo === "IMPRESORA" ? tipo_impresora : null,
         marca,
         modelo,
         numero_serie,
         estado,
       })
-      .eq("id", id)
       .select()
 
     if (error) {
-      console.error(`Error updating equipment with ID ${id}:`, error)
+      console.error("Error creating equipment:", error)
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    if (!updatedEquipment || updatedEquipment.length === 0) {
-      return NextResponse.json({ error: "Equipment not found or no changes made" }, { status: 404 })
-    }
-
-    return NextResponse.json(updatedEquipment[0], { status: 200 })
+    return NextResponse.json(newEquipment[0], { status: 201 })
   } catch (e: any) {
-    console.error(`Unexpected error in PUT /api/equipment/${id}:`, e)
+    console.error("Unexpected error in POST /api/equipment:", e)
     return NextResponse.json({ error: "Internal Server Error", details: e.message }, { status: 500 })
   }
 }
 
-export async function DELETE(request: Request, { params }: { params: { id: string } }) {
-  const { id } = params
+export async function DELETE(request: Request) {
   try {
-    const { error } = await supabase.from("equipment").delete().eq("id", id)
+    const url = new URL(request.url)
+    const equipmentId = url.pathname.split('/').pop()
 
-    if (error) {
-      console.error(`Error deleting equipment with ID ${id}:`, error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    if (!equipmentId) {
+      return NextResponse.json({ error: "Equipment ID is required" }, { status: 400 })
     }
 
-    return NextResponse.json({ message: "Equipment deleted successfully" }, { status: 200 })
+    // Verificar si el equipo está asignado a alguna workstation
+    const { data: assignment } = await supabase
+      .from("workstation_equipment")
+      .select("workstation_id")
+      .eq("equipment_id", equipmentId)
+      .single()
+
+    if (assignment) {
+      return NextResponse.json(
+        { error: "Cannot delete equipment that is assigned to a workstation. Please unassign it first." },
+        { status: 400 }
+      )
+    }
+
+    // Eliminar el equipo
+    const { error: deleteError } = await supabase
+      .from("equipment")
+      .delete()
+      .eq("id", equipmentId)
+
+    if (deleteError) {
+      console.error("Error deleting equipment:", deleteError)
+      return NextResponse.json({ error: deleteError.message }, { status: 500 })
+    }
+
+    return NextResponse.json({ success: true }, { status: 200 })
   } catch (e: any) {
-    console.error(`Unexpected error in DELETE /api/equipment/${id}:`, e)
+    console.error("Unexpected error in DELETE /api/equipment:", e)
     return NextResponse.json({ error: "Internal Server Error", details: e.message }, { status: 500 })
   }
 }
